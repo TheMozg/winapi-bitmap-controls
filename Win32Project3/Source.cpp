@@ -3,17 +3,19 @@
 #include <string.h>
 #include <tchar.h>
 #include "bitmap.h"
-
+#include "resource.h"
 static TCHAR szWindowClass[] = _T("win32app");
 
 static TCHAR szTitle[] = _T("Win32 App - Fedor Kalugin");
-
-static const BOOL drawFast = TRUE;
 
 HINSTANCE hInst;
 
 HBITMAP hBitmap;
 HBITMAP hBitmapOut;
+
+BOOL orig = TRUE;
+
+BYTE* lpPixels;
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -32,9 +34,8 @@ int WINAPI WinMain(HINSTANCE hInstance,
 	wcex.hInstance = hInstance;
 	wcex.hIcon = NULL;
 	wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
-
-	wcex.hbrBackground = CreateSolidBrush(RGB(0xFF, 0xFF, 0xFF));
-	wcex.lpszMenuName = NULL;
+	wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+	wcex.lpszMenuName = MAKEINTRESOURCEW(IDR_MENU1);
 	wcex.lpszClassName = szWindowClass;
 	wcex.hIconSm = NULL;
 
@@ -55,7 +56,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
 		szTitle,
 		WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT,
-		1000, 1000,
+		500, 500,
 		NULL,
 		NULL,
 		hInstance,
@@ -88,56 +89,54 @@ int WINAPI WinMain(HINSTANCE hInstance,
 void paint(HWND hWnd) {
 	PAINTSTRUCT ps;
 	HDC 		hdc;
-	BITMAP 		bitmap;
 	HDC 		hdcMemBitmap;
 	HDC			hdcMemOut;
 	HGDIOBJ 	oldBitmap;
 	HGDIOBJ		oldOutBitmap;
+	BITMAPINFO	bitmapInfo;
 
 	hdc = BeginPaint(hWnd, &ps);
-
-	GetObject(hBitmap, sizeof(bitmap), &bitmap);
 
 	hdcMemBitmap = CreateCompatibleDC(hdc);
 	oldBitmap = SelectObject(hdcMemBitmap, hBitmap);
 
-	hdcMemOut = CreateCompatibleDC(hdc);
-	hBitmapOut = CreateCompatibleBitmap(hdc, bitmap.bmWidth, bitmap.bmHeight);
-	oldOutBitmap = SelectObject(hdcMemOut, hBitmapOut);
-	RECT rect{ 0, 0, bitmap.bmWidth, bitmap.bmHeight };
-	FillRect(hdcMemOut, &rect, CreateSolidBrush(RGB(0x00, 0x00, 0xF0)));
+	// Get the BITMAPINFO structure from the bitmap
+	bitmapInfo = { 0 };
+	bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
+	GetDIBits(hdc, hBitmap, 0, 0, NULL, &bitmapInfo, DIB_RGB_COLORS);
 
-	if (drawFast)
-	{
-		// create intermediate memory dc as a mask without blue channel
-		HDC hdcMemTmp = CreateCompatibleDC(hdc);
-		HBITMAP hTmpBitmap = CreateCompatibleBitmap(hdc, bitmap.bmWidth, bitmap.bmHeight);
-		HGDIOBJ oldTmpBitmap = SelectObject(hdcMemTmp, hTmpBitmap);
-		RECT rect{ 0, 0, bitmap.bmWidth, bitmap.bmHeight };
-		FillRect(hdcMemTmp, &rect, CreateSolidBrush(RGB(0xFF, 0xFF, 0x00)));
+	bitmapInfo.bmiHeader.biBitCount = 32;
+	bitmapInfo.bmiHeader.biCompression = BI_RGB;
 
-		// transfer bitmap removing blue channel
-		BitBlt(hdcMemTmp, 0, 0, bitmap.bmWidth, bitmap.bmHeight, hdcMemBitmap, 0, 0, SRCAND);
-		// transfer bitmap again, this time set blue channel to 0xF0
-		BitBlt(hdcMemOut, 0, 0, bitmap.bmWidth, bitmap.bmHeight, hdcMemTmp, 0, 0, SRCPAINT);
-		
-		SelectObject(hdcMemTmp, oldTmpBitmap);
-		DeleteDC(hdcMemTmp);
-	}
-	else
+	// Call GetDIBits a second time, this time to get pixel data
+	GetDIBits(hdc, hBitmap, 0, bitmapInfo.bmiHeader.biHeight, lpPixels, &bitmapInfo, DIB_RGB_COLORS);
+
+	if (orig == FALSE)
 	{
-		for (size_t x = 0; x < bitmap.bmWidth; x++)
+		BYTE* pCurrPixel = lpPixels;
+		for (size_t y = 0; y < bitmapInfo.bmiHeader.biHeight; y++)
 		{
-			for (size_t y = 0; y < bitmap.bmHeight; y++)
+			for (size_t x = 0; x < bitmapInfo.bmiHeader.biWidth; x++)
 			{
-				COLORREF pixel = GetPixel(hdcMemBitmap, x, y);
-				COLORREF newpixel = RGB(GetRValue(pixel), GetGValue(pixel), 0xF0);
-				SetPixel(hdcMemOut, x, y, newpixel);
+				for (size_t color = 0; color < 3; color++)
+				{
+					if (pCurrPixel[color] < 128)
+						pCurrPixel[color] *= 2;
+					else
+						pCurrPixel[color] = 255;
+				}
+				pCurrPixel += 4;
 			}
 		}
 	}
 
-	BitBlt(hdc, 0, 0, bitmap.bmWidth, bitmap.bmHeight, hdcMemOut, 0, 0, SRCCOPY);
+	hdcMemOut = CreateCompatibleDC(hdc);
+	hBitmapOut = CreateCompatibleBitmap(hdc, bitmapInfo.bmiHeader.biWidth, bitmapInfo.bmiHeader.biHeight);
+	oldOutBitmap = SelectObject(hdcMemOut, hBitmapOut);
+
+	SetDIBits(hdc, hBitmapOut, 0, bitmapInfo.bmiHeader.biHeight, lpPixels, &bitmapInfo, DIB_RGB_COLORS);
+
+	BitBlt(hdc, 0, 0, bitmapInfo.bmiHeader.biWidth, bitmapInfo.bmiHeader.biHeight, hdcMemOut, 0, 0, SRCCOPY);
 
 	SelectObject(hdcMemBitmap, oldBitmap);
 	DeleteDC(hdcMemBitmap);
@@ -152,16 +151,42 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
+	case WM_COMMAND:
+	{
+		int wmId = LOWORD(wParam);
+		switch (wmId)
+		{
+		case ID_FILE_EXIT:
+			DestroyWindow(hWnd);
+			break;
+		case ID_FILE_SAVE:
+			PBITMAPINFO bmpinfo;
+			bmpinfo = CreateBitmapInfoStruct(hWnd, hBitmapOut);
+			CreateBMPFile(hWnd, L"out.bmp", bmpinfo, hBitmapOut, GetDC(hWnd));
+			break;
+		case ID_PICTURE_TOGGLECONTRAST:
+			if (orig == TRUE)
+				orig = FALSE;
+			else
+				orig = TRUE;
+			InvalidateRect(hWnd, NULL, FALSE);
+			break;
+		default:
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		}
+		break;
+	}
 	case WM_CREATE:
 		hBitmap = (HBITMAP)LoadImage(hInst, L"in.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+		PBITMAPINFO info;
+		info = CreateBitmapInfoStruct(hWnd, hBitmap);
+		lpPixels = new BYTE[info->bmiHeader.biSizeImage];
 		break;
 	case WM_PAINT:
 		paint(hWnd);
 		break;
 	case WM_DESTROY:
-		PBITMAPINFO bmpinfo;
-		bmpinfo = CreateBitmapInfoStruct(hWnd, hBitmapOut);
-		CreateBMPFile(hWnd, L"out.bmp", bmpinfo, hBitmapOut, GetDC(hWnd));
+		delete lpPixels;
 		DeleteObject(hBitmap);
 		DeleteObject(hBitmapOut);
 		PostQuitMessage(0);
